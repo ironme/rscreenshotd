@@ -11,7 +11,9 @@ int screenshot(char **dest)
 	DWORD dwBmpSize;
 	DWORD dwSizeofDIB;
 	BITMAPFILEHEADER bmfHeader;
-	BITMAPINFOHEADER bmiHeader;
+	BITMAPINFO *lpbmiInfo = NULL;
+	DWORD dwSizeofInfo;
+	WORD biBitCount = 24;
 	void *lpBitmap = NULL;
 	int width, height;
 	BOOL bRet;
@@ -45,41 +47,54 @@ int screenshot(char **dest)
 	printf("GetObject returns %d\n", nRet);
 	if (!nRet) { ret = -1; goto done; }
 
-	memset(&bmiHeader, 0, sizeof(bmiHeader));
-	memset(&bmfHeader, 0, sizeof(bmfHeader));
-	bmiHeader.biSize = sizeof(BITMAPINFOHEADER);	
-	bmiHeader.biWidth = bmpScreen.bmWidth;
-	bmiHeader.biHeight = bmpScreen.bmHeight;
-	bmiHeader.biPlanes = 1;
-	bmiHeader.biBitCount = 32;
-	bmiHeader.biCompression = BI_RGB;
-	dwBmpSize = ((bmpScreen.bmWidth * bmiHeader.biBitCount + 31) / 32) * 4 * bmpScreen.bmHeight;
+	dwSizeofInfo = sizeof(BITMAPINFOHEADER);
+	switch (biBitCount) {
+		case 1: dwSizeofInfo += 2 * sizeof(RGBQUAD); break;
+		case 4: dwSizeofInfo += 16 * sizeof(RGBQUAD); break;
+		case 8: dwSizeofInfo += 256 * sizeof(RGBQUAD); break;
+		case 16: case 24: case 32: break;
+		default: ret = -1; goto done;
+	};
+	lpbmiInfo = (BITMAPINFO *) malloc(dwSizeofInfo);
+	printf("lpbmiInfo = %p\n", lpbmiInfo);
+	if (!lpbmiInfo) { ret = -1; goto done; }
+	memset(lpbmiInfo, 0, dwSizeofInfo);
+	lpbmiInfo->bmiHeader.biSize = sizeof(BITMAPINFOHEADER);	
+	lpbmiInfo->bmiHeader.biWidth = bmpScreen.bmWidth;
+	lpbmiInfo->bmiHeader.biHeight = bmpScreen.bmHeight;
+	lpbmiInfo->bmiHeader.biPlanes = 1;
+	lpbmiInfo->bmiHeader.biBitCount = biBitCount;
+	lpbmiInfo->bmiHeader.biCompression = BI_RGB;
+	dwBmpSize = (((bmpScreen.bmWidth * lpbmiInfo->bmiHeader.biBitCount + 7) / 8) + 3) / 4 * 4 * bmpScreen.bmHeight;
 
 	lpBitmap = malloc(dwBmpSize);
 	printf("lpBitmap = %p\n", lpBitmap);
 	if (!lpBitmap) { ret = -1; goto done; }
+	memset(lpBitmap, 0, sizeof(dwBmpSize));
 
-	nRet = GetDIBits(hdcMemDC, hbmScreen, 0, (UINT) bmpScreen.bmHeight, lpBitmap, (BITMAPINFO *) &bmiHeader, DIB_RGB_COLORS);
+	nRet = GetDIBits(hdcMemDC, hbmScreen, 0, (UINT) bmpScreen.bmHeight, lpBitmap, lpbmiInfo, DIB_RGB_COLORS);
 	printf("GetDIBits returns %d\n", nRet);
 	if (!nRet) { ret = -1; goto done; }
 
-	dwSizeofDIB = dwBmpSize + sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+	dwSizeofDIB = dwBmpSize + sizeof(BITMAPFILEHEADER) + dwSizeofInfo;
+	memset(&bmfHeader, 0, sizeof(bmfHeader));
 	bmfHeader.bfType = 0x4D42;
 	bmfHeader.bfSize = dwSizeofDIB;
-	bmfHeader.bfOffBits = (DWORD)sizeof(BITMAPFILEHEADER) + (DWORD)sizeof(BITMAPINFOHEADER);
+	bmfHeader.bfOffBits = (DWORD)sizeof(BITMAPFILEHEADER) + dwSizeofInfo;
 	
-	*dest = (char *) realloc(*dest, sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + dwBmpSize);
+	*dest = (char *) realloc(*dest, sizeof(BITMAPFILEHEADER) + dwSizeofInfo + dwBmpSize);
 	printf("dest = %p\n", *dest);
 	if (!*dest) { ret = -1; goto done; }
 
 	memcpy(*dest, &bmfHeader, sizeof(BITMAPFILEHEADER));
 	ret = sizeof(BITMAPFILEHEADER);
-	memcpy(*dest + ret, &bmiHeader, sizeof(BITMAPINFOHEADER));
-	ret += sizeof(BITMAPINFOHEADER);
+	memcpy(*dest + ret, lpbmiInfo, dwSizeofInfo);
+	ret += dwSizeofInfo;
 	memcpy(*dest + ret, lpBitmap, dwBmpSize);
 	ret += dwBmpSize;
 
 done:
+	if (lpbmiInfo) free(lpbmiInfo);
 	if (lpBitmap) free(lpBitmap);
 	if (hbmScreen) DeleteObject(hbmScreen);
 	if (hdcMemDC) DeleteObject(hdcMemDC);
@@ -91,6 +106,7 @@ done:
 int main()
 {
 	char *ptr = NULL;
+	FILE *f = NULL;
 	int ret;
 	int cnt;
 
@@ -101,7 +117,7 @@ int main()
 		goto done;
 	}
 
-	FILE *f = fopen("screenshot.bmp", "wb");
+	f = fopen("screenshot.bmp", "wb");
 	if (!f) {
 		printf("can't open file!\n");
 		goto done;
